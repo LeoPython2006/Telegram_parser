@@ -1,0 +1,7 @@
+config.ini
+*.session
+*.session-journal
+channel_users.json
+channel_messages.json
+__pycache__/
+.venv/
