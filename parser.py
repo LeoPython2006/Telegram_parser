@@ -1,111 +1,136 @@
-#импорт библиотек
+import argparse
 import configparser
 import json
-from telethon.sync import TelegramClient
-from telethon import connection
+from datetime import datetime
 
-# для корректного переноса времени сообщений в json
-from datetime import date, datetime
-
-# классы для работы с каналами
+from telethon import TelegramClient
 from telethon.tl.functions.channels import GetParticipantsRequest
+from telethon.tl.functions.messages import GetHistoryRequest
 from telethon.tl.types import ChannelParticipantsSearch
 
-# класс для работы с сообщениями
-from telethon.tl.functions.messages import GetHistoryRequest
 
-# Считываем учетные данные
-config = configparser.ConfigParser()
-config.read("config.ini")
-
-# Присваиваем значения внутренним переменным
-api_id   = config['Telegram']['api_id']
-api_hash = config['Telegram']['api_hash']
-username = config['Telegram']['username']
-
-#создание клиента
-client = TelegramClient(username, api_id, api_hash)
-
-client.start()
-
-async def dump_all_participants(channel):
-  """Записывает json-файл с информацией о всех участниках канала/чата"""
-  offset_user = 0    # номер участника, с которого начинается считывание
-  limit_user = 100   # максимальное число записей, передаваемых за один раз
-
-  all_participants = []   # список всех участников канала
-  filter_user = ChannelParticipantsSearch('')
-
-  while True:
-    participants = await client(GetParticipantsRequest(channel,
-      filter_user, offset_user, limit_user, hash=0))
-    if not participants.users:
-      break
-    all_participants.extend(participants.users)
-    offset_user += len(participants.users)
-
-  all_users_details = []   # список словарей с интересующими параметрами участников канала
-
-  for participant in all_participants:
-    all_users_details.append({"id": participant.id,
-      "first_name": participant.first_name,
-      "last_name": participant.last_name,
-      "user": participant.username,
-      "phone": participant.phone,
-      "is_bot": participant.bot})
-
-  with open('channel_users.json', 'w', encoding='utf8') as outfile:
-    json.dump(all_users_details, outfile, ensure_ascii=False)
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, value):
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, bytes):
+            return list(value)
+        return super().default(value)
 
 
-async def dump_all_messages(channel):
-  """Записывает json-файл с информацией о всех сообщениях канала/чата"""
-  offset_msg = 0    # номер записи, с которой начинается считывание
-  limit_msg = 100   # максимальное число записей, передаваемых за один раз
+def load_config(path: str = "config.ini") -> tuple[int, str, str]:
+    config = configparser.ConfigParser()
+    if not config.read(path):
+        raise FileNotFoundError(
+            f"{path} was not found. Copy config.example.ini to config.ini first."
+        )
 
-  all_messages = []   # список всех сообщений
-  total_messages = 0
-  total_count_limit = 0  
-
-  class DateTimeEncoder(json.JSONEncoder):
-    '''Класс для сериализации записи дат в JSON'''
-    def default(self, o):
-      if isinstance(o, datetime):
-        return o.isoformat()
-      if isinstance(o, bytes):
-        return list(o)
-      return json.JSONEncoder.default(self, o)
-
-  while True:
-    history = await client(GetHistoryRequest(
-      peer=channel,
-      offset_id=offset_msg,
-      offset_date=None, add_offset=0,
-      limit=limit_msg, max_id=0, min_id=0,
-      hash=0))
-    if not history.messages:
-      break
-    messages = history.messages
-    for message in messages:
-      all_messages.append(message.to_dict())
-    offset_msg = messages[len(messages) - 1].id
-    total_messages = len(all_messages)
-    if total_count_limit != 0 and total_messages >= total_count_limit:
-      break
-
-  with open('channel_messages.json', 'w', encoding='utf8') as outfile:
-     json.dump(all_messages, outfile, ensure_ascii=False, cls=DateTimeEncoder)
+    telegram = config["Telegram"]
+    return (
+        telegram.getint("api_id"),
+        telegram["api_hash"],
+        telegram.get("session_name", "telegram_exporter"),
+    )
 
 
-async def main():
-  
-  url = "https://t.me/+z4vk8rpypPE0ZGZi"
-  channel = await client.get_entity(url)
-  await dump_all_participants(channel)
-  await dump_all_messages(channel)
-  print('dump all participants and messages to Json files finished')
+async def dump_participants(client, channel) -> None:
+    offset = 0
+    limit = 100
+    participants = []
+    participant_filter = ChannelParticipantsSearch("")
 
-    
+    while True:
+        batch = await client(
+            GetParticipantsRequest(
+                channel=channel,
+                filter=participant_filter,
+                offset=offset,
+                limit=limit,
+                hash=0,
+            )
+        )
+        if not batch.users:
+            break
+        participants.extend(batch.users)
+        offset += len(batch.users)
 
-with client:
-  client.loop.run_until_complete(main())
+    payload = [
+        {
+            "id": user.id,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "username": user.username,
+            "phone": user.phone,
+            "is_bot": user.bot,
+        }
+        for user in participants
+    ]
+
+    with open("channel_users.json", "w", encoding="utf-8") as output:
+        json.dump(payload, output, ensure_ascii=False, indent=2)
+
+
+async def dump_messages(client, channel) -> None:
+    offset_id = 0
+    messages = []
+
+    while True:
+        history = await client(
+            GetHistoryRequest(
+                peer=channel,
+                offset_id=offset_id,
+                offset_date=None,
+                add_offset=0,
+                limit=100,
+                max_id=0,
+                min_id=0,
+                hash=0,
+            )
+        )
+        if not history.messages:
+            break
+
+        messages.extend(message.to_dict() for message in history.messages)
+        offset_id = history.messages[-1].id
+
+    with open("channel_messages.json", "w", encoding="utf-8") as output:
+        json.dump(
+            messages,
+            output,
+            ensure_ascii=False,
+            indent=2,
+            cls=DateTimeEncoder,
+        )
+
+
+async def export_channel(client, channel_reference: str) -> None:
+    channel = await client.get_entity(channel_reference)
+    await dump_participants(client, channel)
+    await dump_messages(client, channel)
+    print("Export completed: channel_users.json and channel_messages.json")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Export Telegram channel participants and messages to JSON."
+    )
+    parser.add_argument(
+        "--channel",
+        required=True,
+        help="Telegram channel username, invite link, or URL.",
+    )
+    parser.add_argument(
+        "--config",
+        default="config.ini",
+        help="Path to the local credentials file.",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    api_id, api_hash, session_name = load_config(args.config)
+    client = TelegramClient(session_name, api_id, api_hash)
+
+    with client:
+        client.loop.run_until_complete(export_channel(client, args.channel))
