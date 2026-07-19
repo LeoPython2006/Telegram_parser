@@ -1,26 +1,25 @@
 import configparser
+from getpass import getpass
 
 
-config = configparser.ConfigParser()
+def main() -> None:
+    api_id = input("Telegram API ID: ").strip()
+    api_hash = getpass("Telegram API hash: ").strip()
+    session_name = input("Local session name [telegram_exporter]: ").strip()
+    session_name = session_name or "telegram_exporter"
+
+    config = configparser.ConfigParser()
+    config["Telegram"] = {
+        "api_id": api_id,
+        "api_hash": api_hash,
+        "session_name": session_name,
+    }
+
+    with open("config.ini", "w", encoding="utf-8") as config_file:
+        config.write(config_file)
+
+    print("Created config.ini. Keep it private; it is excluded by .gitignore.")
 
 
-# наполнение конфига
-# config['DEFAULT'] = {'ServerAliveInterval': '45',
-#                      'Compression': 'yes',
-#                      'CompressionLevel': '9'}
-# config['forge.example'] = {}
-# config['forge.example']['User'] = 'hg'
-# config['topsecret.server.example'] = {}
-# topsecret = config['topsecret.server.example']
-# topsecret['Port'] = '50022'     # mutates the parser
-# topsecret['ForwardX11'] = 'no'  # same here
-# config['DEFAULT']['ForwardX11'] = 'yes'
-
-config['Telegram'] = {}
-config['Telegram']['api_id'] = '23293092'
-config['Telegram']['api_hash'] = 'e192f6e222a5b892d9d084bbef93ac2d'
-config['Telegram']['username'] = 'tg_username'
-
-
-with open('config.ini', 'w') as configfile:
-  config.write(configfile)
+if __name__ == "__main__":
+    main()
